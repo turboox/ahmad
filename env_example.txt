@@ -1,0 +1,23 @@
+# Database Configuration
+# Copy this file to .env and fill in your actual database credentials
+
+# For local PostgreSQL (if you have it installed)
+DB_HOST=localhost
+DB_NAME=taskmanager
+DB_USER=postgres
+DB_PASSWORD=your_password_here
+DB_PORT=5432
+
+# For Neon.tech (free PostgreSQL)
+# DB_HOST=your-neon-host.neon.tech
+# DB_NAME=neondb
+# DB_USER=your-username
+# DB_PASSWORD=your-password
+# DB_PORT=5432
+
+# For Supabase
+# DB_HOST=db.your-project.supabase.co
+# DB_NAME=postgres
+# DB_USER=postgres
+# DB_PASSWORD=your-password
+# DB_PORT=5432
