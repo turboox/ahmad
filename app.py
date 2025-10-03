@@ -2,7 +2,8 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import plotly.graph_objects as go
+from datetime import datetime, date
 import os
 from dotenv import load_dotenv
 
@@ -11,8 +12,8 @@ load_dotenv()
 
 # Page configuration
 st.set_page_config(
-    page_title="Personal Task Manager",
-    page_icon="📋",
+    page_title="نظام المحاسبة الشامل",
+    page_icon="💰",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -74,81 +75,312 @@ def execute_query(query, params=None, fetch=False):
 # Initialize database tables
 def init_database():
     """Create tables if they don't exist"""
-    # Create tasks table
-    execute_query("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id SERIAL PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            description TEXT,
-            priority VARCHAR(20) DEFAULT 'Medium',
-            status VARCHAR(20) DEFAULT 'Pending',
-            due_date DATE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
     
-    # Create categories table
+    # الموظفين
     execute_query("""
-        CREATE TABLE IF NOT EXISTS categories (
+        CREATE TABLE IF NOT EXISTS employees (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(100) UNIQUE NOT NULL,
-            color VARCHAR(7) DEFAULT '#FF6B6B',
+            name VARCHAR(255) NOT NULL,
+            position VARCHAR(255),
+            phone VARCHAR(20),
+            salary DECIMAL(10,2) DEFAULT 0,
+            hire_date DATE DEFAULT CURRENT_DATE,
+            is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
-    # Insert default categories
+    # الفواتير
     execute_query("""
-        INSERT INTO categories (name, color) 
-        VALUES 
-            ('Work', '#4ECDC4'),
-            ('Personal', '#45B7D1'),
-            ('Health', '#96CEB4'),
-            ('Learning', '#FFEAA7')
-        ON CONFLICT (name) DO NOTHING
+        CREATE TABLE IF NOT EXISTS invoices (
+            id SERIAL PRIMARY KEY,
+            invoice_number VARCHAR(50) UNIQUE NOT NULL,
+            customer_name VARCHAR(255) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            tax_amount DECIMAL(10,2) DEFAULT 0,
+            total_amount DECIMAL(10,2) NOT NULL,
+            payment_method VARCHAR(20) DEFAULT 'cash',
+            status VARCHAR(20) DEFAULT 'pending',
+            invoice_date DATE DEFAULT CURRENT_DATE,
+            due_date DATE,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # الرواتب
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS salaries (
+            id SERIAL PRIMARY KEY,
+            employee_id INTEGER REFERENCES employees(id),
+            month INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            basic_salary DECIMAL(10,2) NOT NULL,
+            overtime DECIMAL(10,2) DEFAULT 0,
+            bonuses DECIMAL(10,2) DEFAULT 0,
+            deductions DECIMAL(10,2) DEFAULT 0,
+            net_salary DECIMAL(10,2) NOT NULL,
+            payment_date DATE,
+            status VARCHAR(20) DEFAULT 'pending',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # المصاريف
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS expenses (
+            id SERIAL PRIMARY KEY,
+            expense_type VARCHAR(50) NOT NULL,
+            category VARCHAR(100) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            description TEXT,
+            payment_method VARCHAR(20) DEFAULT 'cash',
+            is_fixed BOOLEAN DEFAULT FALSE,
+            expense_date DATE DEFAULT CURRENT_DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # السحوبات
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id SERIAL PRIMARY KEY,
+            amount DECIMAL(10,2) NOT NULL,
+            reason TEXT NOT NULL,
+            withdrawal_date DATE DEFAULT CURRENT_DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # الذمم
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS accounts_receivable (
+            id SERIAL PRIMARY KEY,
+            customer_name VARCHAR(255) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            due_date DATE,
+            status VARCHAR(20) DEFAULT 'pending',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # الإغلاق اليومي
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS daily_closing (
+            id SERIAL PRIMARY KEY,
+            closing_date DATE UNIQUE NOT NULL,
+            cash_start DECIMAL(10,2) DEFAULT 0,
+            cash_end DECIMAL(10,2) DEFAULT 0,
+            visa_start DECIMAL(10,2) DEFAULT 0,
+            visa_end DECIMAL(10,2) DEFAULT 0,
+            total_sales DECIMAL(10,2) DEFAULT 0,
+            total_expenses DECIMAL(10,2) DEFAULT 0,
+            total_withdrawals DECIMAL(10,2) DEFAULT 0,
+            net_amount DECIMAL(10,2) DEFAULT 0,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # الإيداعات
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS deposits (
+            id SERIAL PRIMARY KEY,
+            amount DECIMAL(10,2) NOT NULL,
+            deposit_type VARCHAR(50) NOT NULL,
+            bank_name VARCHAR(255),
+            account_number VARCHAR(100),
+            deposit_date DATE DEFAULT CURRENT_DATE,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # كشف الحساب
+    execute_query("""
+        CREATE TABLE IF NOT EXISTS account_statement (
+            id SERIAL PRIMARY KEY,
+            transaction_date DATE NOT NULL,
+            description TEXT NOT NULL,
+            debit DECIMAL(10,2) DEFAULT 0,
+            credit DECIMAL(10,2) DEFAULT 0,
+            balance DECIMAL(10,2) NOT NULL,
+            transaction_type VARCHAR(50) NOT NULL,
+            reference_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
 
-# CRUD operations
-def add_task(title, description, priority, due_date, category_id=None):
-    """Add a new task"""
-    return execute_query("""
-        INSERT INTO tasks (title, description, priority, due_date)
-        VALUES (%s, %s, %s, %s)
-    """, (title, description, priority, due_date))
+# CRUD operations for accounting system
 
-def get_tasks():
-    """Get all tasks"""
+# الموظفين
+def add_employee(name, position, phone, salary, hire_date):
+    """إضافة موظف جديد"""
+    return execute_query("""
+        INSERT INTO employees (name, position, phone, salary, hire_date)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (name, position, phone, salary, hire_date))
+
+def get_employees():
+    """جلب جميع الموظفين"""
     result = execute_query("""
-        SELECT id, title, description, priority, status, due_date, created_at
-        FROM tasks
-        ORDER BY created_at DESC
+        SELECT id, name, position, phone, salary, hire_date, is_active
+        FROM employees
+        ORDER BY name
     """, fetch=True)
     return result if result is not None else []
 
-def update_task_status(task_id, new_status):
-    """Update task status"""
+# الفواتير
+def add_invoice(invoice_number, customer_name, amount, tax_amount, total_amount, payment_method, due_date, notes):
+    """إضافة فاتورة جديدة"""
     return execute_query("""
-        UPDATE tasks 
-        SET status = %s, updated_at = CURRENT_TIMESTAMP
-        WHERE id = %s
-    """, (new_status, task_id))
+        INSERT INTO invoices (invoice_number, customer_name, amount, tax_amount, total_amount, payment_method, due_date, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (invoice_number, customer_name, amount, tax_amount, total_amount, payment_method, due_date, notes))
 
-def delete_task(task_id):
-    """Delete a task"""
-    return execute_query("DELETE FROM tasks WHERE id = %s", (task_id,))
+def get_invoices():
+    """جلب جميع الفواتير"""
+    result = execute_query("""
+        SELECT id, invoice_number, customer_name, amount, tax_amount, total_amount, payment_method, status, invoice_date, due_date
+        FROM invoices
+        ORDER BY invoice_date DESC
+    """, fetch=True)
+    return result if result is not None else []
 
-def get_task_stats():
-    """Get task statistics"""
+# الرواتب
+def add_salary(employee_id, month, year, basic_salary, overtime, bonuses, deductions, net_salary, payment_date, notes):
+    """إضافة راتب موظف"""
+    return execute_query("""
+        INSERT INTO salaries (employee_id, month, year, basic_salary, overtime, bonuses, deductions, net_salary, payment_date, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (employee_id, month, year, basic_salary, overtime, bonuses, deductions, net_salary, payment_date, notes))
+
+def get_salaries():
+    """جلب جميع الرواتب"""
+    result = execute_query("""
+        SELECT s.id, e.name, s.month, s.year, s.basic_salary, s.overtime, s.bonuses, s.deductions, s.net_salary, s.payment_date, s.status
+        FROM salaries s
+        JOIN employees e ON s.employee_id = e.id
+        ORDER BY s.year DESC, s.month DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# المصاريف
+def add_expense(expense_type, category, amount, description, payment_method, is_fixed, expense_date):
+    """إضافة مصروف جديد"""
+    return execute_query("""
+        INSERT INTO expenses (expense_type, category, amount, description, payment_method, is_fixed, expense_date)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (expense_type, category, amount, description, payment_method, is_fixed, expense_date))
+
+def get_expenses():
+    """جلب جميع المصاريف"""
+    result = execute_query("""
+        SELECT id, expense_type, category, amount, description, payment_method, is_fixed, expense_date
+        FROM expenses
+        ORDER BY expense_date DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# السحوبات
+def add_withdrawal(amount, reason, withdrawal_date):
+    """إضافة سحب جديد"""
+    return execute_query("""
+        INSERT INTO withdrawals (amount, reason, withdrawal_date)
+        VALUES (%s, %s, %s)
+    """, (amount, reason, withdrawal_date))
+
+def get_withdrawals():
+    """جلب جميع السحوبات"""
+    result = execute_query("""
+        SELECT id, amount, reason, withdrawal_date
+        FROM withdrawals
+        ORDER BY withdrawal_date DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# الذمم
+def add_account_receivable(customer_name, amount, due_date, notes):
+    """إضافة ذمة جديدة"""
+    return execute_query("""
+        INSERT INTO accounts_receivable (customer_name, amount, due_date, notes)
+        VALUES (%s, %s, %s, %s)
+    """, (customer_name, amount, due_date, notes))
+
+def get_accounts_receivable():
+    """جلب جميع الذمم"""
+    result = execute_query("""
+        SELECT id, customer_name, amount, due_date, status, notes
+        FROM accounts_receivable
+        ORDER BY due_date
+    """, fetch=True)
+    return result if result is not None else []
+
+# الإغلاق اليومي
+def add_daily_closing(closing_date, cash_start, cash_end, visa_start, visa_end, total_sales, total_expenses, total_withdrawals, net_amount, notes):
+    """إضافة إغلاق يومي"""
+    return execute_query("""
+        INSERT INTO daily_closing (closing_date, cash_start, cash_end, visa_start, visa_end, total_sales, total_expenses, total_withdrawals, net_amount, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (closing_date, cash_start, cash_end, visa_start, visa_end, total_sales, total_expenses, total_withdrawals, net_amount, notes))
+
+def get_daily_closings():
+    """جلب جميع الإغلاقات اليومية"""
+    result = execute_query("""
+        SELECT id, closing_date, cash_start, cash_end, visa_start, visa_end, total_sales, total_expenses, total_withdrawals, net_amount
+        FROM daily_closing
+        ORDER BY closing_date DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# الإيداعات
+def add_deposit(amount, deposit_type, bank_name, account_number, deposit_date, notes):
+    """إضافة إيداع جديد"""
+    return execute_query("""
+        INSERT INTO deposits (amount, deposit_type, bank_name, account_number, deposit_date, notes)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (amount, deposit_type, bank_name, account_number, deposit_date, notes))
+
+def get_deposits():
+    """جلب جميع الإيداعات"""
+    result = execute_query("""
+        SELECT id, amount, deposit_type, bank_name, account_number, deposit_date, notes
+        FROM deposits
+        ORDER BY deposit_date DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# كشف الحساب
+def add_account_statement_entry(transaction_date, description, debit, credit, balance, transaction_type, reference_id):
+    """إضافة قيد في كشف الحساب"""
+    return execute_query("""
+        INSERT INTO account_statement (transaction_date, description, debit, credit, balance, transaction_type, reference_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (transaction_date, description, debit, credit, balance, transaction_type, reference_id))
+
+def get_account_statement():
+    """جلب كشف الحساب"""
+    result = execute_query("""
+        SELECT id, transaction_date, description, debit, credit, balance, transaction_type, reference_id
+        FROM account_statement
+        ORDER BY transaction_date DESC
+    """, fetch=True)
+    return result if result is not None else []
+
+# الإحصائيات
+def get_financial_summary():
+    """جلب ملخص مالي"""
     result = execute_query("""
         SELECT 
-            COUNT(*) as total,
-            COUNT(CASE WHEN status = 'Completed' THEN 1 END) as completed,
-            COUNT(CASE WHEN status = 'Pending' THEN 1 END) as pending,
-            COUNT(CASE WHEN status = 'In Progress' THEN 1 END) as in_progress
-        FROM tasks
+            (SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE status = 'paid') as total_sales,
+            (SELECT COALESCE(SUM(amount), 0) FROM expenses) as total_expenses,
+            (SELECT COALESCE(SUM(amount), 0) FROM withdrawals) as total_withdrawals,
+            (SELECT COALESCE(SUM(net_salary), 0) FROM salaries WHERE status = 'paid') as total_salaries,
+            (SELECT COALESCE(SUM(amount), 0) FROM deposits) as total_deposits
     """, fetch=True)
-    return result[0] if result and len(result) > 0 else (0, 0, 0, 0)
+    return result[0] if result and len(result) > 0 else (0, 0, 0, 0, 0)
 
 # Main app
 def main():
